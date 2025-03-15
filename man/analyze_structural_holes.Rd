@@ -4,23 +4,23 @@
 \alias{analyze_structural_holes}
 \title{Analyze structural holes and brokerage measures for ego networks}
 \usage{
-analyze_structural_holes(adj_matrix, directed = TRUE, include_ego = TRUE)
+analyze_structural_holes(adj_matrix, directed = TRUE, weighted = FALSE)
 }
 \arguments{
 \item{adj_matrix}{An adjacency matrix representing network ties}
 
 \item{directed}{Logical, whether the network is directed. Default is TRUE}
 
-\item{include_ego}{Logical, whether to include ego in constraint calculations. Default is TRUE}
+\item{weighted}{Logical, whether the network is weighted. Default is FALSE}
 }
 \value{
-A data frame with structural hole measures including effect size and constraint
+A data frame with structural hole measures including degree, ego_density, effect_size and constraint
 }
 \description{
 Analyze structural holes and brokerage measures for ego networks
 }
 \examples{
-# Create sample adjacency matrix
+# Create sample binary adjacency matrix
 friendship_matrix <- matrix(
   c(0,1,1,0,1,0,0,1,1,0,0,1),
   nrow = 4, byrow = TRUE
