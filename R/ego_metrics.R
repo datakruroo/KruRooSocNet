@@ -1327,3 +1327,139 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
 
   return(results)
 }
+
+#' Analyze structural holes and brokerage measures for ego networks
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#' @param include_ego Logical, whether to include ego in constraint calculations. Default is TRUE
+#'
+#' @return A data frame with structural hole measures including effect size and constraint
+#' @export
+#' @importFrom igraph graph_from_adjacency_matrix ego make_ego_graph graph.density degree constraint
+#' @importFrom dplyr bind_rows mutate
+#'
+#' @examples
+#' # Create sample adjacency matrix
+#' friendship_matrix <- matrix(
+#'   c(0,1,1,0,1,0,0,1,1,0,0,1),
+#'   nrow = 4, byrow = TRUE
+#' )
+#' rownames(friendship_matrix) <- colnames(friendship_matrix) <- paste0("P", 1:4)
+#'
+#' # Analyze structural holes
+#' analyze_structural_holes(friendship_matrix)
+analyze_structural_holes <- function(adj_matrix, directed = TRUE, include_ego = TRUE) {
+
+  # Check if adj_matrix is a matrix
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Ensure matrix has row and column names
+  if (is.null(rownames(adj_matrix))) {
+    rownames(adj_matrix) <- colnames(adj_matrix) <- paste0("N", 1:nrow(adj_matrix))
+  }
+
+  # Create igraph object
+  g <- graph_from_adjacency_matrix(adj_matrix, mode = ifelse(directed, "directed", "undirected"))
+
+  # Get list of all nodes
+  nodes <- rownames(adj_matrix)
+  n_nodes <- length(nodes)
+
+  # Initialize result dataframe
+  results <- data.frame(
+    node = character(n_nodes),
+    degree = numeric(n_nodes),
+    ego_density = numeric(n_nodes),
+    effect_size = numeric(n_nodes),
+    efficiency = numeric(n_nodes),
+    constraint = numeric(n_nodes),
+    hierarchy = numeric(n_nodes),
+    stringsAsFactors = FALSE
+  )
+
+  # Calculate metrics for each ego
+  for (i in 1:n_nodes) {
+    ego_name <- nodes[i]
+
+    # Extract ego network (order 1 = immediate neighbors)
+    ego_net <- make_ego_graph(g, order = 1, nodes = ego_name)[[1]]
+
+    # Get alters (neighbors of ego)
+    alters <- setdiff(V(ego_net)$name, ego_name)
+    n_alters <- length(alters)
+
+    # Calculate degree (number of alters)
+    ego_degree <- n_alters
+
+    # Calculate density of ego network (excluding ego if specified)
+    if (include_ego) {
+      ego_density <- graph.density(ego_net)
+    } else {
+      # If we don't include ego, extract the subgraph of just the alters
+      if (n_alters > 1) {
+        alter_net <- induced_subgraph(ego_net, alters)
+        ego_density <- graph.density(alter_net)
+      } else {
+        ego_density <- 0  # If only one or zero alters, density is 0
+      }
+    }
+
+    # Calculate effect size: n - 2*m/(n)
+    # Where n is number of alters and m is number of ties among alters
+    if (n_alters > 1) {
+      if (include_ego) {
+        # Total possible ties among all nodes including ego
+        total_possible_ties <- n_alters * (n_alters + 1) / 2
+        # Actual ties (excluding self-loops)
+        actual_ties <- ecount(ego_net) - sum(diag(adj_matrix[V(ego_net)$name, V(ego_net)$name]))
+        # Ties directly connected to ego
+        ego_ties <- ego_degree
+        # Ties among alters
+        alter_ties <- actual_ties - ego_ties
+        # Average degree of alters (excluding ties to ego)
+        avg_alter_degree <- 2 * alter_ties / n_alters
+      } else {
+        # Only consider ties among alters
+        alter_net <- induced_subgraph(ego_net, alters)
+        alter_ties <- ecount(alter_net)
+        # Average degree of alters
+        avg_alter_degree <- 2 * alter_ties / n_alters
+      }
+
+      # Effect Size formula for binary networks: n - avg_alter_degree
+      effect_size <- n_alters - avg_alter_degree
+    } else {
+      effect_size <- n_alters  # If only one alter, effect size equals number of alters
+    }
+
+    # Calculate efficiency: effect_size / n
+    efficiency <- if (n_alters > 0) effect_size / n_alters else 0
+
+    # Calculate constraint using igraph's constraint function
+    if (n_alters > 0) {
+      constr <- constraint(g, nodes = ego_name)
+      constraint_value <- constr[1]
+
+      # Calculate hierarchy (not directly available in igraph)
+      # Approximated using constraint and density relationship
+      hierarchy <- 1 - ego_density
+    } else {
+      constraint_value <- 0
+      hierarchy <- 0
+    }
+
+    # Store results
+    results$node[i] <- ego_name
+    results$degree[i] <- ego_degree
+    results$ego_density[i] <- ego_density
+    results$effect_size[i] <- effect_size
+    results$efficiency[i] <- efficiency
+    results$constraint[i] <- constraint_value
+    results$hierarchy[i] <- hierarchy
+  }
+
+  return(results)
+}
