@@ -2,7 +2,9 @@
 
 export(analyze_alter_composition)
 export(analyze_categorical_composition)
+export(analyze_categorical_similarity)
 export(analyze_continuous_composition)
+export(analyze_continuous_similarity)
 export(calculate_degree)
 export(calculate_ei_index)
 export(calculate_iqv)
