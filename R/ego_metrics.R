@@ -652,3 +652,304 @@ calculate_similarity <- function(adj_matrix, node_attributes, attribute_name,
   return(result)
 }
 
+
+#' Analyze categorical composition of alters for each ego in a network
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param node_attributes A data frame containing node attributes
+#' @param category_col The name of the categorical attribute column to analyze (e.g., "Department")
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#' @param self_ties Logical, whether to include self ties. Default is FALSE
+#' @param values_fill Value to fill for missing combinations in the wide format. Default is 0
+#'
+#' @return A data frame with categorical composition of alters for each ego in wide format
+#' @export
+#' @importFrom dplyr left_join group_by summarize mutate rename filter select
+#' @importFrom tidyr pivot_longer pivot_wider
+#' @importFrom tibble rownames_to_column column_to_rownames
+#'
+#' @examples
+#' # Create sample adjacency matrix
+#' friendship_matrix <- matrix(
+#'   c(0,1,1,0,1,0,0,1,1,0,0,1),
+#'   nrow = 4, byrow = TRUE
+#' )
+#' rownames(friendship_matrix) <- colnames(friendship_matrix) <- paste0("P", 1:4)
+#'
+#' # Create sample attributes
+#' attributes <- data.frame(
+#'   node = paste0("P", 1:4),
+#'   department = c("HR", "IT", "HR", "Finance")
+#' )
+#'
+#' # Analyze department composition
+#' analyze_categorical_composition(
+#'   friendship_matrix,
+#'   attributes,
+#'   "department"
+#' )
+analyze_categorical_composition <- function(adj_matrix, node_attributes, category_col,
+                                            directed = TRUE, self_ties = FALSE,
+                                            values_fill = 0) {
+
+  # Check if adj_matrix is a matrix
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Check if node_attributes is a data frame
+  if (!is.data.frame(node_attributes)) {
+    stop("node_attributes must be a data frame")
+  }
+
+  # Check if category_col exists in node_attributes
+  if (!(category_col %in% colnames(node_attributes))) {
+    stop(paste("Column", category_col, "not found in node_attributes"))
+  }
+
+  # Determine node ID column (first column)
+  node_id_col <- colnames(node_attributes)[1]
+
+  # Ensure rownames and colnames in adj_matrix
+  if (is.null(rownames(adj_matrix))) {
+    if (nrow(adj_matrix) == nrow(node_attributes)) {
+      rownames(adj_matrix) <- node_attributes[[node_id_col]]
+      colnames(adj_matrix) <- node_attributes[[node_id_col]]
+    } else {
+      stop("Cannot determine node names for the adjacency matrix")
+    }
+  }
+
+  # Check if all nodes in the adjacency matrix exist in node_attributes
+  if (!all(rownames(adj_matrix) %in% node_attributes[[node_id_col]])) {
+    stop("Some nodes in the adjacency matrix are not found in node_attributes")
+  }
+
+  # Convert adjacency matrix to edge list (long format)
+  edge_list <- data.frame(
+    ego = rep(rownames(adj_matrix), each = ncol(adj_matrix)),
+    alter = rep(colnames(adj_matrix), times = nrow(adj_matrix)),
+    tie = as.vector(adj_matrix)
+  )
+
+  # Remove self-ties if specified
+  if (!self_ties) {
+    edge_list <- edge_list[edge_list$ego != edge_list$alter, ]
+  }
+
+  # Keep only existing ties
+  edge_list <- edge_list[edge_list$tie > 0, ]
+
+  # Prepare category data for both ego and alter
+  result <- edge_list %>%
+    # Join category data for ego
+    left_join(node_attributes, by = c("ego" = node_id_col)) %>%
+    rename(category_ego = !!category_col) %>%
+    # Join category data for alter
+    left_join(node_attributes, by = c("alter" = node_id_col)) %>%
+    rename(category_alter = !!category_col)
+
+  # Calculate frequencies by ego, ego_category, and alter_category
+  composition <- result %>%
+    group_by(ego, category_ego, category_alter) %>%
+    summarize(
+      frequency = sum(tie),
+      .groups = "drop_last"
+    ) %>%
+    # Calculate proportions within each ego
+    group_by(ego, category_ego) %>%
+    mutate(proportion = frequency / sum(frequency))
+
+  # Calculate IQV (Index of Qualitative Variation) for each ego
+  iqv_data <- composition %>%
+    group_by(ego) %>%
+    summarize(
+      num_categories = n_distinct(category_alter),
+      sum_prop_squared = sum(proportion^2),
+      IQV = ifelse(num_categories > 1,
+                   (1 - sum_prop_squared) / (1 - 1/num_categories),
+                   0),
+      .groups = "drop"
+    )
+
+  # Join IQV back to composition data
+  composition <- composition %>%
+    left_join(iqv_data[, c("ego", "IQV")], by = "ego")
+
+  # Create wide format
+  composition_wide <- composition %>%
+    pivot_wider(
+      id_cols = c(ego, category_ego, IQV),
+      names_from = category_alter,
+      values_from = c(frequency, proportion),
+      values_fill = list(frequency = values_fill, proportion = values_fill)
+    )
+
+  return(composition_wide)
+}
+
+#' Analyze continuous attribute composition of alters for each ego
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param node_attributes A data frame containing node attributes
+#' @param attribute_col The name of the continuous attribute column to analyze (e.g., "Tenure")
+#' @param category_col Optional. If provided, results will be grouped by this categorical variable
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#' @param self_ties Logical, whether to include self ties. Default is FALSE
+#'
+#' @return A data frame with summary statistics of the continuous attribute for each ego's alters
+#' @export
+#' @importFrom dplyr left_join group_by summarize mutate filter select n
+#' @importFrom tidyr pivot_longer pivot_wider
+#' @importFrom tibble rownames_to_column column_to_rownames
+#' @importFrom stats mean sd median min max var
+#'
+#' @examples
+#' # Create sample adjacency matrix
+#' friendship_matrix <- matrix(
+#'   c(0,1,1,0,1,0,0,1,1,0,0,1),
+#'   nrow = 4, byrow = TRUE
+#' )
+#' rownames(friendship_matrix) <- colnames(friendship_matrix) <- paste0("P", 1:4)
+#'
+#' # Create sample attributes
+#' attributes <- data.frame(
+#'   node = paste0("P", 1:4),
+#'   department = c("HR", "IT", "HR", "Finance"),
+#'   tenure = c(5, 3, 8, 2)
+#' )
+#'
+#' # Analyze tenure composition
+#' analyze_continuous_composition(
+#'   friendship_matrix,
+#'   attributes,
+#'   "tenure"
+#' )
+#'
+#' # Analyze tenure composition grouped by department
+#' analyze_continuous_composition(
+#'   friendship_matrix,
+#'   attributes,
+#'   "tenure",
+#'   category_col = "department"
+#' )
+analyze_continuous_composition <- function(adj_matrix, node_attributes, attribute_col,
+                                           category_col = NULL, directed = TRUE,
+                                           self_ties = FALSE) {
+
+  # Check if adj_matrix is a matrix
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Check if node_attributes is a data frame
+  if (!is.data.frame(node_attributes)) {
+    stop("node_attributes must be a data frame")
+  }
+
+  # Check if attribute_col exists in node_attributes
+  if (!(attribute_col %in% colnames(node_attributes))) {
+    stop(paste("Column", attribute_col, "not found in node_attributes"))
+  }
+
+  # Check if the attribute is numeric
+  if (!is.numeric(node_attributes[[attribute_col]])) {
+    stop(paste("Column", attribute_col, "must be numeric"))
+  }
+
+  # Check if optional category_col exists (if provided)
+  if (!is.null(category_col) && !(category_col %in% colnames(node_attributes))) {
+    stop(paste("Column", category_col, "not found in node_attributes"))
+  }
+
+  # Determine node ID column (first column)
+  node_id_col <- colnames(node_attributes)[1]
+
+  # Ensure rownames and colnames in adj_matrix
+  if (is.null(rownames(adj_matrix))) {
+    if (nrow(adj_matrix) == nrow(node_attributes)) {
+      rownames(adj_matrix) <- node_attributes[[node_id_col]]
+      colnames(adj_matrix) <- node_attributes[[node_id_col]]
+    } else {
+      stop("Cannot determine node names for the adjacency matrix")
+    }
+  }
+
+  # Check if all nodes in the adjacency matrix exist in node_attributes
+  if (!all(rownames(adj_matrix) %in% node_attributes[[node_id_col]])) {
+    stop("Some nodes in the adjacency matrix are not found in node_attributes")
+  }
+
+  # Convert adjacency matrix to edge list (long format)
+  edge_list <- data.frame(
+    ego = rep(rownames(adj_matrix), each = ncol(adj_matrix)),
+    alter = rep(colnames(adj_matrix), times = nrow(adj_matrix)),
+    tie = as.vector(adj_matrix)
+  )
+
+  # Remove self-ties if specified
+  if (!self_ties) {
+    edge_list <- edge_list[edge_list$ego != edge_list$alter, ]
+  }
+
+  # Keep only existing ties
+  edge_list <- edge_list[edge_list$tie > 0, ]
+
+  # Join attribute data
+  result <- edge_list
+
+  # Add ego's attributes
+  selected_ego_cols <- c(node_id_col, attribute_col)
+  if (!is.null(category_col)) {
+    selected_ego_cols <- c(selected_ego_cols, category_col)
+  }
+
+  result <- result %>%
+    # Join ego attributes
+    left_join(node_attributes[, selected_ego_cols], by = c("ego" = node_id_col))
+
+  # Rename ego columns
+  if (!is.null(category_col)) {
+    result <- result %>%
+      rename(
+        ego_attribute = !!attribute_col,
+        ego_category = !!category_col
+      )
+  } else {
+    result <- result %>%
+      rename(ego_attribute = !!attribute_col)
+  }
+
+  # Join alter attributes
+  result <- result %>%
+    left_join(node_attributes[, c(node_id_col, attribute_col)], by = c("alter" = node_id_col)) %>%
+    rename(alter_attribute = !!attribute_col)
+
+  # Prepare grouping variables for summarization
+  if (!is.null(category_col)) {
+    grouping_vars <- c("ego", "ego_category")
+  } else {
+    grouping_vars <- "ego"
+  }
+
+  # Calculate summary statistics
+  summary_stats <- result %>%
+    group_by_at(grouping_vars) %>%
+    summarize(
+      ego_attribute_value = first(ego_attribute),
+      num_alters = n(),
+      sum_attribute = sum(alter_attribute * tie, na.rm = TRUE),
+      mean_attribute = mean(alter_attribute, na.rm = TRUE),
+      median_attribute = median(alter_attribute, na.rm = TRUE),
+      sd_attribute = sd(alter_attribute, na.rm = TRUE),
+      var_attribute = var(alter_attribute, na.rm = TRUE),
+      min_attribute = min(alter_attribute, na.rm = TRUE),
+      max_attribute = max(alter_attribute, na.rm = TRUE),
+      range_attribute = max_attribute - min_attribute,
+      weighted_mean = sum(alter_attribute * tie, na.rm = TRUE) / sum(tie, na.rm = TRUE),
+      abs_diff_from_ego = mean(abs(alter_attribute - ego_attribute_value), na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  return(summary_stats)
+}
