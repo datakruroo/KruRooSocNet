@@ -2,14 +2,13 @@
 % Please edit documentation in R/ego_metrics.R
 \name{analyze_continuous_similarity}
 \alias{analyze_continuous_similarity}
-\title{Analyze ego-alter similarity for continuous attributes}
+\title{Analyze ego-alter similarity for continuous attributes using correlation approach}
 \usage{
 analyze_continuous_similarity(
   adj_matrix,
   node_attributes,
   attribute_col,
-  method = "absolute_diff",
-  category_col = NULL,
+  similarity_metrics = "all",
   directed = TRUE,
   self_ties = FALSE
 )
@@ -19,22 +18,21 @@ analyze_continuous_similarity(
 
 \item{node_attributes}{A data frame containing node attributes}
 
-\item{attribute_col}{The name of the continuous attribute column to analyze (e.g., "age")}
+\item{attribute_col}{The name of the continuous attribute column to analyze (e.g., "age", "tenure")}
 
-\item{method}{Method for calculating similarity. Options: "absolute_diff" (default),
-"squared_diff", "normalized", "correlation"}
-
-\item{category_col}{Optional. If provided, results will be grouped by this categorical variable}
+\item{similarity_metrics}{Character vector of similarity metrics to calculate.
+Options: "absolute_diff", "squared_diff", "normalized_similarity", "all" (default)}
 
 \item{directed}{Logical, whether the network is directed. Default is TRUE}
 
 \item{self_ties}{Logical, whether to include self ties. Default is FALSE}
 }
 \value{
-A data frame with similarity measures between ego and alters for continuous attributes
+A data frame with similarity measures between ego and alters including point-biserial
+correlations and their interpretation
 }
 \description{
-Analyze ego-alter similarity for continuous attributes
+Analyze ego-alter similarity for continuous attributes using correlation approach
 }
 \examples{
 # Create sample adjacency matrix
