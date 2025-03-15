@@ -1224,18 +1224,12 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
 #' @param category_col The name of the categorical attribute column to analyze (e.g., "department")
 #' @param directed Logical, whether the network is directed. Default is TRUE
 #' @param self_ties Logical, whether to include self ties. Default is FALSE
-#' @param category_labels Optional. Named vector of labels for category counts.
-#'        The counts represent:
-#'        a: Number of coworkers/friends in the same department as ego
-#'        b: Number of coworkers/friends in different departments from ego
-#'        c: Number of non-coworkers/non-friends in the same department as ego
-#'        d: Number of non-coworkers/non-friends in different departments from ego
 #'
 #' @return A data frame with homophily measures including counts, proportions, EI index,
 #'         odds ratio, log odds ratio, and Yule's Q
 #' @export
-#' @importFrom dplyr left_join group_by summarize mutate filter select rename
-#' @importFrom tidyr pivot_wider
+#' @importFrom dplyr left_join group_by summarize mutate filter select rename case_when n
+#' @importFrom tidyr pivot_longer pivot_wider
 #'
 #' @examples
 #' # Create sample adjacency matrix
@@ -1258,8 +1252,7 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
 #'   "department"
 #' )
 analyze_categorical_similarity <- function(adj_matrix, node_attributes, category_col,
-                                           directed = TRUE, self_ties = FALSE,
-                                           category_labels = c("a", "b", "c", "d")) {
+                                           directed = TRUE, self_ties = FALSE) {
 
   # Check if adj_matrix is a matrix
   if (!is.matrix(adj_matrix)) {
@@ -1294,130 +1287,105 @@ analyze_categorical_similarity <- function(adj_matrix, node_attributes, category
     stop("Some nodes in the adjacency matrix are not found in node_attributes")
   }
 
-  # Convert adjacency matrix to edge list (long format)
-  edge_list <- data.frame(
-    ego = rep(rownames(adj_matrix), each = ncol(adj_matrix)),
-    alter = rep(colnames(adj_matrix), times = nrow(adj_matrix)),
-    tie = as.vector(adj_matrix)
-  )
-
-  # Remove self-ties if specified
-  if (!self_ties) {
-    edge_list <- edge_list[edge_list$ego != edge_list$alter, ]
-  }
-
-  # Keep only existing ties
-  edge_list <- edge_list[edge_list$tie > 0, ]
-
-  # Join category data
-  result <- edge_list %>%
-    # Join category data for ego
-    left_join(node_attributes, by = c("ego" = node_id_col)) %>%
-    rename(ego_category = !!category_col) %>%
-    # Join category data for alter
-    left_join(node_attributes, by = c("alter" = node_id_col)) %>%
-    rename(alter_category = !!category_col)
-
-  # Get all possible nodes and their category
-  all_nodes <- node_attributes %>%
-    select(node = !!node_id_col, ego_category = !!category_col)
-
-  # Create a table of contingency counts for each ego
-  homophily_table <- result %>%
-    # Determine if ego and alter are in same category
-    mutate(same_category = ego_category == alter_category) %>%
-    # Group by ego and count in each category
-    group_by(ego, ego_category) %>%
-    summarize(
-      # Ties to same category
-      a = sum(same_category),
-      # Ties to different category
-      b = sum(!same_category),
-      .groups = "drop"
-    )
-
-  # Get all possible nodes including those without any ties
-  all_nodes_df <- data.frame(
+  # Convert adjacency matrix to edge list with ALL possible pairs (both ties and non-ties)
+  all_pairs <- expand.grid(
     ego = rownames(adj_matrix),
+    alter = colnames(adj_matrix),
     stringsAsFactors = FALSE
   ) %>%
-    left_join(node_attributes, by = c("ego" = node_id_col)) %>%
-    rename(ego_category = !!category_col)
+    filter(ego != alter) %>%  # Remove self-ties
+    mutate(tie = 0)  # Default to no tie
 
-  # Add nodes without ties to the homophily table
-  homophily_table <- all_nodes_df %>%
-    left_join(homophily_table, by = c("ego", "ego_category")) %>%
+  # Update tie status for existing ties
+  for (i in 1:nrow(all_pairs)) {
+    ego_i <- all_pairs$ego[i]
+    alter_i <- all_pairs$alter[i]
+    all_pairs$tie[i] <- adj_matrix[ego_i, alter_i]
+  }
+
+  # Join attribute data
+  result <- all_pairs %>%
+    left_join(node_attributes, by = c("ego" = node_id_col)) %>%
+    rename(department_ego = !!category_col) %>%
+    left_join(node_attributes, by = c("alter" = node_id_col)) %>%
+    rename(department_alter = !!category_col)
+
+  # Calculate homophily types directly using case_when, similar to user's code
+  contingency_counts <- result %>%
     mutate(
-      a = ifelse(is.na(a), 0, a),
-      b = ifelse(is.na(b), 0, b)
+      type = case_when(
+        tie > 0 & department_ego == department_alter ~ "a",  # Same department ties
+        tie > 0 & department_ego != department_alter ~ "b",  # Different department ties
+        tie == 0 & department_ego == department_alter ~ "c", # Same department non-ties
+        tie == 0 & department_ego != department_alter ~ "d"  # Different department non-ties
+      )
+    ) %>%
+    group_by(ego, department_ego, type) %>%
+    summarize(count = n(), .groups = "drop")
+
+  # Pivot wider to get counts in separate columns
+  contingency_wide <- contingency_counts %>%
+    pivot_wider(
+      id_cols = c(ego, department_ego),
+      names_from = type,
+      values_from = count,
+      values_fill = 0
     )
 
-  # Now calculate potential ties that weren't made
-  # For each ego, count how many alters are in same and different categories
-  potential_ties <- node_attributes %>%
-    group_by(!!as.name(category_col)) %>%
-    summarize(count = n(), .groups = "drop") %>%
-    rename(category = !!category_col)
-
-  # For each ego, calculate c and d
-  homophily_table <- homophily_table %>%
-    left_join(potential_ties, by = c("ego_category" = "category")) %>%
-    rename(same_category_count = count) %>%
-    mutate(
-      # Non-ties to same category
-      c = same_category_count - 1 - a,  # Subtract 1 to exclude the ego from the count
-      # Get count of different category nodes
-      different_category_count = nrow(node_attributes) - same_category_count,
-      # Non-ties to different category
-      d = different_category_count - b
-    ) %>%
-    select(-same_category_count, -different_category_count)
+  # Make sure all columns exist, even if there are no cases
+  for (col in c("a", "b", "c", "d")) {
+    if (!(col %in% colnames(contingency_wide))) {
+      contingency_wide[[col]] <- 0
+    }
+  }
 
   # Calculate homophily measures
-  homophily_measures <- homophily_table %>%
+  homophily_measures <- contingency_wide %>%
     mutate(
-      # Rename columns to match user's table
+      # Rename columns
       node = ego,
-      `Ego's department` = ego_category,
+      `Ego's department` = department_ego,
 
       # Calculate proportion of ties to same category (S)
-      # a = Same department ties, b = Different department ties
       `Proportion same (S)` = ifelse(a + b > 0, a / (a + b), NA),
 
       # Calculate E-I index
-      # (External - Internal) / (External + Internal)
-      # where External = b (different dept ties), Internal = a (same dept ties)
       `EI index` = ifelse(a + b > 0, (b - a) / (a + b), NA),
 
       # Calculate Odds ratio
-      # (a*d)/(b*c) = (same dept ties * different dept non-ties) / (different dept ties * same dept non-ties)
-      # Higher values indicate homophily (tendency to connect with same department)
       `Odds ratio` = ifelse(b * c > 0, (a * d) / (b * c),
                             ifelse(a * d > 0 & (b == 0 | c == 0), Inf,
                                    ifelse(a == 0 & d == 0, 0, NA))),
 
       # Calculate Log odds ratio
-      # Natural logarithm of odds ratio, making the measure symmetric around 0
-      # Positive values indicate homophily, negative values indicate heterophily
       `Log odds ratio` = ifelse(is.finite(`Odds ratio`) & `Odds ratio` > 0,
                                 log(`Odds ratio`),
                                 ifelse(`Odds ratio` == 0, -Inf,
                                        ifelse(`Odds ratio` == Inf, Inf, NA))),
 
       # Calculate Yule's Q
-      # Standardized version of odds ratio, ranges from -1 to 1
-      # Values near 1 indicate strong homophily, values near -1 indicate strong heterophily
       `Yule's Q` = ifelse(is.finite(`Odds ratio`),
                           (`Odds ratio` - 1) / (`Odds ratio` + 1),
                           ifelse(`Odds ratio` == 0, -1,
                                  ifelse(`Odds ratio` == Inf, 1, NA)))
     ) %>%
-    # Rename count columns to match user's table with clear descriptions
-    rename(
-      "(a)" = a,  # Number of coworkers/friends in the same department as ego
-      "(b)" = b,  # Number of coworkers/friends in different departments from ego
-      "(c)" = c,  # Number of non-coworkers/non-friends in the same department as ego
-      "(d)" = d   # Number of non-coworkers/non-friends in different departments from ego
+    # Rename count columns to match desired format
+#    rename(
+#      "(a)" = a,  # Number of coworkers/friends in the same department as ego
+#      "(b)" = b,  # Number of coworkers/friends in different departments from ego
+#      "(c)" = c,  # Number of non-coworkers/non-friends in the same department as ego
+#      "(d)" = d   # Number of non-coworkers/non-friends in different departments from ego
+#    ) %>%
+    # Select and order columns to match the desired output
+    select(
+      node,
+      `Ego's department`,
+      a, b, c, d,
+      `Proportion same (S)`,
+      `EI index`,
+      `Odds ratio`,
+      `Log odds ratio`,
+      `Yule's Q`
     )
 
   return(homophily_measures)

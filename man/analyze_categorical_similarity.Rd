@@ -9,8 +9,7 @@ analyze_categorical_similarity(
   node_attributes,
   category_col,
   directed = TRUE,
-  self_ties = FALSE,
-  category_labels = c("a", "b", "c", "d")
+  self_ties = FALSE
 )
 }
 \arguments{
@@ -23,13 +22,6 @@ analyze_categorical_similarity(
 \item{directed}{Logical, whether the network is directed. Default is TRUE}
 
 \item{self_ties}{Logical, whether to include self ties. Default is FALSE}
-
-\item{category_labels}{Optional. Named vector of labels for category counts.
-The counts represent:
-a: Number of coworkers/friends in the same department as ego
-b: Number of coworkers/friends in different departments from ego
-c: Number of non-coworkers/non-friends in the same department as ego
-d: Number of non-coworkers/non-friends in different departments from ego}
 }
 \value{
 A data frame with homophily measures including counts, proportions, EI index,
