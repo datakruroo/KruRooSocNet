@@ -1134,13 +1134,14 @@ analyze_categorical_similarity <- function(adj_matrix, node_attributes, category
 #' @param adj_matrix An adjacency matrix representing network ties
 #' @param node_attributes A data frame containing node attributes
 #' @param attribute_col The name of the continuous attribute column to analyze (e.g., "age", "tenure")
-#' @param similarity_metrics Character vector of similarity metrics to calculate.
-#'        Options: "absolute_diff", "squared_diff", "normalized_similarity", "all" (default)
 #' @param directed Logical, whether the network is directed. Default is TRUE
 #' @param self_ties Logical, whether to include self ties. Default is FALSE
 #'
-#' @return A data frame with similarity measures between ego and alters including point-biserial
-#'         correlations and their interpretation
+#' @return A data frame with columns:
+#'         - absolute difference between ego's attribute and average alters' attribute
+#'         - correlation between ego's connection to alters and absolute difference
+#'         - correlation between ego's connection to alters and squared difference
+#'         - correlation between ego's connection to alters and identity coefficient
 #' @export
 #' @importFrom dplyr left_join group_by summarize mutate filter select rename
 #' @importFrom stats cor cor.test
@@ -1156,7 +1157,6 @@ analyze_categorical_similarity <- function(adj_matrix, node_attributes, category
 #' # Create sample attributes
 #' attributes <- data.frame(
 #'   node = paste0("P", 1:4),
-#'   department = c("HR", "IT", "HR", "Finance"),
 #'   tenure = c(5, 3, 8, 2)
 #' )
 #'
@@ -1167,7 +1167,6 @@ analyze_categorical_similarity <- function(adj_matrix, node_attributes, category
 #'   "tenure"
 #' )
 analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute_col,
-                                          similarity_metrics = "all",
                                           directed = TRUE, self_ties = FALSE) {
 
   # Check if adj_matrix is a matrix
@@ -1188,22 +1187,6 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
   # Check if the attribute is numeric
   if (!is.numeric(node_attributes[[attribute_col]])) {
     stop(paste("Column", attribute_col, "must be numeric"))
-  }
-
-  # Handle similarity_metrics parameter
-  valid_metrics <- c("absolute_diff", "squared_diff", "normalized_similarity")
-  if ("all" %in% similarity_metrics) {
-    similarity_metrics <- valid_metrics
-  } else {
-    invalid_metrics <- setdiff(similarity_metrics, valid_metrics)
-    if (length(invalid_metrics) > 0) {
-      warning(paste("Invalid metrics:", paste(invalid_metrics, collapse = ", "),
-                    "will be ignored"))
-      similarity_metrics <- intersect(similarity_metrics, valid_metrics)
-    }
-    if (length(similarity_metrics) == 0) {
-      similarity_metrics <- "absolute_diff"  # Default if none valid
-    }
   }
 
   # Determine node ID column (first column)
@@ -1261,129 +1244,86 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
     mutate(
       absolute_diff = abs(ego_attribute - alter_attribute),
       squared_diff = (ego_attribute - alter_attribute)^2,
-      normalized_similarity = 1 - (absolute_diff / attr_range)
+      identity_coeff = 1 - (absolute_diff / attr_range)  # I(x) coefficient
     )
 
-  # Initialize results list
+  # Get list of all egos
   ego_list <- unique(result_df$ego)
   n_egos <- length(ego_list)
 
-  # Create data frame for storing results
+  # Initialize results data frame
   results <- data.frame(
     node = ego_list,
-    attribute_value = numeric(n_egos),
-    pb_corr_abs_diff = numeric(n_egos),
-    pb_corr_squared_diff = numeric(n_egos),
-    pb_corr_normalized = numeric(n_egos),
-    p_value_abs_diff = numeric(n_egos),
-    p_value_squared_diff = numeric(n_egos),
-    p_value_normalized = numeric(n_egos),
-    interpretation = character(n_egos),
-    tie_variance = numeric(n_egos),
-    mean_abs_diff_ties = numeric(n_egos),
-    mean_abs_diff_nonties = numeric(n_egos),
-    mean_similarity_ties = numeric(n_egos),
-    mean_similarity_nonties = numeric(n_egos),
+    ego_attribute_value = numeric(n_egos),
+    abs_diff_ego_and_mean_alters = numeric(n_egos),
+    corr_tie_abs_diff = numeric(n_egos),
+    corr_tie_squared_diff = numeric(n_egos),
+    corr_tie_identity_coeff = numeric(n_egos),
     stringsAsFactors = FALSE
   )
 
-  # Calculate point-biserial correlation and other statistics for each ego
+  # Calculate for each ego
   for (i in 1:n_egos) {
     ego_i <- ego_list[i]
     ego_data <- result_df[result_df$ego == ego_i, ]
 
-    # Store ego's attribute value
-    results$attribute_value[i] <- ego_data$ego_attribute[1]
+    # Get ego's attribute value
+    ego_attr_value <- ego_data$ego_attribute[1]
+    results$ego_attribute_value[i] <- ego_attr_value
 
-    # Check if there's sufficient variation in tie and metrics
-    has_ties <- any(ego_data$tie == 1)
-    has_nonties <- any(ego_data$tie == 0)
-    tie_variance <- var(ego_data$tie)
-    results$tie_variance[i] <- tie_variance
+    # Calculate mean attribute value of all potential alters
+    mean_alter_attr <- mean(ego_data$alter_attribute, na.rm = TRUE)
 
-    # Only calculate if there's variation in ties and differences
-    if (has_ties && has_nonties && tie_variance > 0) {
+    # Calculate absolute difference between ego's attribute and mean of alters' attributes
+    results$abs_diff_ego_and_mean_alters[i] <- abs(ego_attr_value - mean_alter_attr)
 
-      # Calculate mean values for ties and non-ties
-      tie_data <- ego_data[ego_data$tie == 1, ]
-      nontie_data <- ego_data[ego_data$tie == 0, ]
+    # Check if there's variation in ties and in metrics
+    has_ties <- any(ego_data$tie == 1, na.rm = TRUE)
+    has_nonties <- any(ego_data$tie == 0, na.rm = TRUE)
 
-      results$mean_abs_diff_ties[i] <- mean(tie_data$absolute_diff, na.rm = TRUE)
-      results$mean_abs_diff_nonties[i] <- mean(nontie_data$absolute_diff, na.rm = TRUE)
-      results$mean_similarity_ties[i] <- mean(tie_data$normalized_similarity, na.rm = TRUE)
-      results$mean_similarity_nonties[i] <- mean(nontie_data$normalized_similarity, na.rm = TRUE)
-
-      # Calculate point-biserial correlation for absolute difference
-      if ("absolute_diff" %in% similarity_metrics &&
-          length(unique(ego_data$absolute_diff)) > 1) {
-        cor_test <- cor.test(ego_data$tie, ego_data$absolute_diff,
-                             method = "pearson", alternative = "two.sided")
-        results$pb_corr_abs_diff[i] <- cor_test$estimate
-        results$p_value_abs_diff[i] <- cor_test$p.value
-      }
-
-      # Calculate point-biserial correlation for squared difference
-      if ("squared_diff" %in% similarity_metrics &&
-          length(unique(ego_data$squared_diff)) > 1) {
-        cor_test <- cor.test(ego_data$tie, ego_data$squared_diff,
-                             method = "pearson", alternative = "two.sided")
-        results$pb_corr_squared_diff[i] <- cor_test$estimate
-        results$p_value_squared_diff[i] <- cor_test$p.value
-      }
-
-      # Calculate point-biserial correlation for normalized similarity
-      if ("normalized_similarity" %in% similarity_metrics &&
-          length(unique(ego_data$normalized_similarity)) > 1) {
-        cor_test <- cor.test(ego_data$tie, ego_data$normalized_similarity,
-                             method = "pearson", alternative = "two.sided")
-        results$pb_corr_normalized[i] <- cor_test$estimate
-        results$p_value_normalized[i] <- cor_test$p.value
-      }
-
-      # Create interpretation based on normalized similarity correlation
-      # (reversed from absolute difference interpretation)
-      if (!is.na(results$pb_corr_normalized[i])) {
-        corr_val <- results$pb_corr_normalized[i]
-        p_val <- results$p_value_normalized[i]
-
-        if (p_val < 0.05) {
-          if (corr_val > 0.3) {
-            results$interpretation[i] <- "Strong homophily (strongly prefers similar alters)"
-          } else if (corr_val > 0) {
-            results$interpretation[i] <- "Moderate homophily (tends to prefer similar alters)"
-          } else if (corr_val < -0.3) {
-            results$interpretation[i] <- "Strong heterophily (strongly prefers different alters)"
-          } else {
-            results$interpretation[i] <- "Moderate heterophily (tends to prefer different alters)"
-          }
-        } else {
-          results$interpretation[i] <- "No significant pattern detected"
-        }
+    # Calculate point-biserial correlations only if there's variation
+    if (has_ties && has_nonties) {
+      # Correlation between tie existence and absolute difference
+      if (length(unique(ego_data$absolute_diff)) > 1) {
+        results$corr_tie_abs_diff[i] <- cor(ego_data$tie, ego_data$absolute_diff,
+                                            method = "pearson", use = "complete.obs")
       } else {
-        results$interpretation[i] <- "Insufficient variation for analysis"
+        results$corr_tie_abs_diff[i] <- NA
+      }
+
+      # Correlation between tie existence and squared difference
+      if (length(unique(ego_data$squared_diff)) > 1) {
+        results$corr_tie_squared_diff[i] <- cor(ego_data$tie, ego_data$squared_diff,
+                                                method = "pearson", use = "complete.obs")
+      } else {
+        results$corr_tie_squared_diff[i] <- NA
+      }
+
+      # Correlation between tie existence and identity coefficient
+      if (length(unique(ego_data$identity_coeff)) > 1) {
+        results$corr_tie_identity_coeff[i] <- cor(ego_data$tie, ego_data$identity_coeff,
+                                                  method = "pearson", use = "complete.obs")
+      } else {
+        results$corr_tie_identity_coeff[i] <- NA
       }
     } else {
-      results$interpretation[i] <- "Insufficient variation in ties or attributes"
+      # Not enough variation to calculate correlations
+      results$corr_tie_abs_diff[i] <- NA
+      results$corr_tie_squared_diff[i] <- NA
+      results$corr_tie_identity_coeff[i] <- NA
     }
   }
 
-  # Format the results
-  final_results <- results %>%
+  # Rename columns for better readability
+  results <- results %>%
     rename(
-      "Node" = node,
-      "Attribute Value" = attribute_value,
-      "PB Corr (Abs Diff)" = pb_corr_abs_diff,
-      "p-value (Abs Diff)" = p_value_abs_diff,
-      "PB Corr (Squared Diff)" = pb_corr_squared_diff,
-      "p-value (Squared Diff)" = p_value_squared_diff,
-      "PB Corr (Normalized Sim)" = pb_corr_normalized,
-      "p-value (Normalized)" = p_value_normalized,
-      "Interpretation" = interpretation,
-      "Mean Abs Diff (Ties)" = mean_abs_diff_ties,
-      "Mean Abs Diff (Non-ties)" = mean_abs_diff_nonties,
-      "Mean Similarity (Ties)" = mean_similarity_ties,
-      "Mean Similarity (Non-ties)" = mean_similarity_nonties
+      `Node` = node,
+      `Ego's attribute value` = ego_attribute_value,
+      `Abs diff: ego-mean alters` = abs_diff_ego_and_mean_alters,
+      `Corr: tie-abs diff` = corr_tie_abs_diff,
+      `Corr: tie-squared diff` = corr_tie_squared_diff,
+      `Corr: tie-identity coeff` = corr_tie_identity_coeff
     )
 
-  return(final_results)
+  return(results)
 }

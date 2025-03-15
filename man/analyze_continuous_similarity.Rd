@@ -8,7 +8,6 @@ analyze_continuous_similarity(
   adj_matrix,
   node_attributes,
   attribute_col,
-  similarity_metrics = "all",
   directed = TRUE,
   self_ties = FALSE
 )
@@ -20,16 +19,16 @@ analyze_continuous_similarity(
 
 \item{attribute_col}{The name of the continuous attribute column to analyze (e.g., "age", "tenure")}
 
-\item{similarity_metrics}{Character vector of similarity metrics to calculate.
-Options: "absolute_diff", "squared_diff", "normalized_similarity", "all" (default)}
-
 \item{directed}{Logical, whether the network is directed. Default is TRUE}
 
 \item{self_ties}{Logical, whether to include self ties. Default is FALSE}
 }
 \value{
-A data frame with similarity measures between ego and alters including point-biserial
-correlations and their interpretation
+A data frame with columns:
+- absolute difference between ego's attribute and average alters' attribute
+- correlation between ego's connection to alters and absolute difference
+- correlation between ego's connection to alters and squared difference
+- correlation between ego's connection to alters and identity coefficient
 }
 \description{
 Analyze ego-alter similarity for continuous attributes using correlation approach
@@ -45,7 +44,6 @@ rownames(friendship_matrix) <- colnames(friendship_matrix) <- paste0("P", 1:4)
 # Create sample attributes
 attributes <- data.frame(
   node = paste0("P", 1:4),
-  department = c("HR", "IT", "HR", "Finance"),
   tenure = c(5, 3, 8, 2)
 )
 
