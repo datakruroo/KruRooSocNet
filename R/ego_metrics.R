@@ -1224,7 +1224,12 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
 #' @param category_col The name of the categorical attribute column to analyze (e.g., "department")
 #' @param directed Logical, whether the network is directed. Default is TRUE
 #' @param self_ties Logical, whether to include self ties. Default is FALSE
-#' @param category_labels Optional. Named vector of labels for category counts (default: a, b, c, d)
+#' @param category_labels Optional. Named vector of labels for category counts.
+#'        The counts represent:
+#'        a: Number of coworkers/friends in the same department as ego
+#'        b: Number of coworkers/friends in different departments from ego
+#'        c: Number of non-coworkers/non-friends in the same department as ego
+#'        d: Number of non-coworkers/non-friends in different departments from ego
 #'
 #' @return A data frame with homophily measures including counts, proportions, EI index,
 #'         odds ratio, log odds ratio, and Yule's Q
@@ -1376,34 +1381,43 @@ analyze_categorical_similarity <- function(adj_matrix, node_attributes, category
       `Ego's department` = ego_category,
 
       # Calculate proportion of ties to same category (S)
+      # a = Same department ties, b = Different department ties
       `Proportion same (S)` = ifelse(a + b > 0, a / (a + b), NA),
 
       # Calculate E-I index
+      # (External - Internal) / (External + Internal)
+      # where External = b (different dept ties), Internal = a (same dept ties)
       `EI index` = ifelse(a + b > 0, (b - a) / (a + b), NA),
 
       # Calculate Odds ratio
+      # (a*d)/(b*c) = (same dept ties * different dept non-ties) / (different dept ties * same dept non-ties)
+      # Higher values indicate homophily (tendency to connect with same department)
       `Odds ratio` = ifelse(b * c > 0, (a * d) / (b * c),
                             ifelse(a * d > 0 & (b == 0 | c == 0), Inf,
                                    ifelse(a == 0 & d == 0, 0, NA))),
 
       # Calculate Log odds ratio
+      # Natural logarithm of odds ratio, making the measure symmetric around 0
+      # Positive values indicate homophily, negative values indicate heterophily
       `Log odds ratio` = ifelse(is.finite(`Odds ratio`) & `Odds ratio` > 0,
                                 log(`Odds ratio`),
                                 ifelse(`Odds ratio` == 0, -Inf,
                                        ifelse(`Odds ratio` == Inf, Inf, NA))),
 
       # Calculate Yule's Q
+      # Standardized version of odds ratio, ranges from -1 to 1
+      # Values near 1 indicate strong homophily, values near -1 indicate strong heterophily
       `Yule's Q` = ifelse(is.finite(`Odds ratio`),
                           (`Odds ratio` - 1) / (`Odds ratio` + 1),
                           ifelse(`Odds ratio` == 0, -1,
                                  ifelse(`Odds ratio` == Inf, 1, NA)))
     ) %>%
-    # Rename count columns to match user's table
+    # Rename count columns to match user's table with clear descriptions
     rename(
-      "(a)" = a,
-      "(b)" = b,
-      "(c)" = c,
-      "(d)" = d
+      "(a)" = a,  # Number of coworkers/friends in the same department as ego
+      "(b)" = b,  # Number of coworkers/friends in different departments from ego
+      "(c)" = c,  # Number of non-coworkers/non-friends in the same department as ego
+      "(d)" = d   # Number of non-coworkers/non-friends in different departments from ego
     )
 
   return(homophily_measures)

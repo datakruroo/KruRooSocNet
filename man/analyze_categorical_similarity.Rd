@@ -24,7 +24,12 @@ analyze_categorical_similarity(
 
 \item{self_ties}{Logical, whether to include self ties. Default is FALSE}
 
-\item{category_labels}{Optional. Named vector of labels for category counts (default: a, b, c, d)}
+\item{category_labels}{Optional. Named vector of labels for category counts.
+The counts represent:
+a: Number of coworkers/friends in the same department as ego
+b: Number of coworkers/friends in different departments from ego
+c: Number of non-coworkers/non-friends in the same department as ego
+d: Number of non-coworkers/non-friends in different departments from ego}
 }
 \value{
 A data frame with homophily measures including counts, proportions, EI index,
