@@ -1254,8 +1254,8 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
   # Initialize results data frame
   results <- data.frame(
     node = ego_list,
-    ego_attribute_value = numeric(n_egos),
-    abs_diff_ego_and_mean_alters = numeric(n_egos),
+    ego_attr_value = numeric(n_egos),
+    abs_diff_value = numeric(n_egos),
     corr_tie_abs_diff = numeric(n_egos),
     corr_tie_squared_diff = numeric(n_egos),
     corr_tie_identity_coeff = numeric(n_egos),
@@ -1269,13 +1269,13 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
 
     # Get ego's attribute value
     ego_attr_value <- ego_data$ego_attribute[1]
-    results$ego_attribute_value[i] <- ego_attr_value
+    results$ego_attr_value[i] <- ego_attr_value
 
     # Calculate mean attribute value of all potential alters
     mean_alter_attr <- mean(ego_data$alter_attribute, na.rm = TRUE)
 
     # Calculate absolute difference between ego's attribute and mean of alters' attributes
-    results$abs_diff_ego_and_mean_alters[i] <- abs(ego_attr_value - mean_alter_attr)
+    results$abs_diff_value[i] <- abs(ego_attr_value - mean_alter_attr)
 
     # Check if there's variation in ties and in metrics
     has_ties <- any(ego_data$tie == 1, na.rm = TRUE)
@@ -1315,15 +1315,15 @@ analyze_continuous_similarity <- function(adj_matrix, node_attributes, attribute
   }
 
   # Rename columns for better readability
-  results <- results %>%
-    rename(
-      `Node` = node,
-      `Ego's attribute value` = ego_attribute_value,
-      `Abs diff: ego-mean alters` = abs_diff_ego_and_mean_alters,
-      `Corr: tie-abs diff` = corr_tie_abs_diff,
-      `Corr: tie-squared diff` = corr_tie_squared_diff,
-      `Corr: tie-identity coeff` = corr_tie_identity_coeff
-    )
+ # results <- results %>%
+ #   rename(
+#      `Node` = node,
+#      `Ego's attribute value` = ego_attr_value,
+#      `Abs diff: ego-mean alters` = abs_diff_value,
+#      `Corr: tie-abs diff` = corr_tie_abs_diff,
+#      `Corr: tie-squared diff` = corr_tie_squared_diff,
+#      `Corr: tie-identity coeff` = corr_tie_identity_coeff
+#    )
 
   return(results)
 }
@@ -1605,4 +1605,138 @@ calculate_effect_size <- function(adj_matrix, weighted = FALSE, directed = TRUE)
   }
 
   return(results)
+}
+
+#' Calculate Pairwise and Total Constraint for Ego Networks
+#'
+#' This function calculates the pairwise constraint (c_ij) and total constraint
+#' for each ego in a network using Burt's formula:
+#' c_ij = (p_ij + sum_k(p_ik * p_kj))^2
+#' where p_ij is the proportion of ego i's network time/energy invested in relationship with j.
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#' @param diag Logical, whether to include self-loops. Default is FALSE
+#'
+#' @return A tibble in long format containing ego, alter, pairwise constraint,
+#'         and total constraint values
+#' @export
+#' @importFrom igraph graph_from_adjacency_matrix
+#' @importFrom dplyr %>% mutate group_by summarize ungroup
+#' @importFrom tidyr pivot_longer
+#' @importFrom tibble tibble
+#'
+#' @examples
+#' # Create sample adjacency matrix
+#' adj_mat <- matrix(c(0,1,1,0,1,0,0,1,1,0,0,1), nrow=4, byrow=TRUE)
+#' rownames(adj_mat) <- colnames(adj_mat) <- paste0("N", 1:4)
+#'
+#' # Calculate constraint
+#' calculate_constraint(adj_mat)
+calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
+  # Input validation
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Ensure matrix has row and column names
+  if (is.null(rownames(adj_matrix))) {
+    rownames(adj_matrix) <- colnames(adj_matrix) <- paste0("N", 1:nrow(adj_matrix))
+  }
+
+  # Get node names
+  nodes <- rownames(adj_matrix)
+  n_nodes <- length(nodes)
+
+  # Create p_ij matrix (proportion of i's relations invested in j)
+  p_matrix <- matrix(0, nrow = n_nodes, ncol = n_nodes)
+  rownames(p_matrix) <- colnames(p_matrix) <- nodes
+
+  # Calculate row sums for normalization
+  row_sums <- rowSums(adj_matrix)
+
+  # Avoid division by zero
+  for (i in 1:n_nodes) {
+    if (row_sums[i] > 0) {
+      p_matrix[i, ] <- adj_matrix[i, ] / row_sums[i]
+    }
+  }
+
+  # Initialize results as a list to store pairs
+  results_list <- list()
+  counter <- 1
+
+  # Calculate constraint for each ego-alter pair and total constraint for each ego
+  for (i in 1:n_nodes) {
+    ego <- nodes[i]
+    total_constraint <- 0
+
+    for (j in 1:n_nodes) {
+      # Skip if i == j and diag is FALSE (no self loops)
+      if (i == j && !diag) {
+        next
+      }
+
+      alter <- nodes[j]
+
+      # Skip if there's no direct connection from i to j
+      if (p_matrix[i, j] == 0) {
+        next
+      }
+
+      # Calculate the direct relationship value
+      direct <- p_matrix[i, j]
+
+      # Calculate the indirect relationship value through all k
+      indirect <- 0
+      for (k in 1:n_nodes) {
+        # Skip when k is i or j
+        if (k == i || k == j) {
+          next
+        }
+
+        # Add indirect path i->k->j
+        indirect <- indirect + (p_matrix[i, k] * p_matrix[k, j])
+      }
+
+      # Calculate pairwise constraint c_ij
+      pairwise_constraint <- (direct + indirect)^2
+
+      # Add to the total constraint for ego
+      total_constraint <- total_constraint + pairwise_constraint
+
+      # Store the results
+      results_list[[counter]] <- list(
+        ego = ego,
+        alter = alter,
+        pairwise_constraint = pairwise_constraint
+      )
+      counter <- counter + 1
+    }
+
+    # Add the total constraint as special rows
+    # This will make it easier to filter/extract total constraints later
+    results_list[[counter]] <- list(
+      ego = ego,
+      alter = "total",
+      pairwise_constraint = total_constraint
+    )
+    counter <- counter + 1
+  }
+
+  # Convert list to tibble (long format)
+  results_df <- do.call(rbind, lapply(results_list, as.data.frame))
+  results_tibble <- tibble::as_tibble(results_df)
+
+  # Create a new column for total constraint that repeats the value for all rows of the same ego
+  results_final <- results_tibble %>%
+    group_by(ego) %>%
+    mutate(total_constraint = pairwise_constraint[alter == "total"]) %>%
+    ungroup()
+
+  # Option 1: Keep the "total" rows
+  return(results_final)
+
+  # Option 2: Remove the "total" rows if you prefer
+  # return(results_final %>% filter(alter != "total"))
 }
