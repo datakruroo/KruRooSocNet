@@ -1472,3 +1472,137 @@ analyze_structural_holes <- function(adj_matrix, directed = TRUE, weighted = FAL
 
   return(results)
 }
+
+#' Calculate Effect Size for Structural Holes in Ego Networks
+#'
+#' This function calculates the effect size measure for structural holes in ego networks
+#' using Burt's formula. It supports both binary and valued networks.
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param weighted Logical, whether the network is weighted (valued). Default is FALSE
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#'
+#' @return A data frame with effect size values for each ego
+#' @export
+#' @importFrom igraph graph_from_adjacency_matrix make_ego_graph degree
+#'
+#' @examples
+#' # Binary network example
+#' binary_matrix <- matrix(c(0,1,1,0,1,0,0,1,1,0,0,1), nrow=4, byrow=TRUE)
+#' rownames(binary_matrix) <- colnames(binary_matrix) <- paste0("N", 1:4)
+#' calculate_effect_size(binary_matrix)
+#'
+#' # Valued network example
+#' valued_matrix <- matrix(c(0,3,2,0,1,0,0,4,2,0,0,5), nrow=4, byrow=TRUE)
+#' rownames(valued_matrix) <- colnames(valued_matrix) <- paste0("N", 1:4)
+#' calculate_effect_size(valued_matrix, weighted=TRUE)
+calculate_effect_size <- function(adj_matrix, weighted = FALSE, directed = TRUE) {
+  # Input validation
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Ensure matrix has row and column names
+  if (is.null(rownames(adj_matrix))) {
+    rownames(adj_matrix) <- colnames(adj_matrix) <- paste0("N", 1:nrow(adj_matrix))
+  }
+
+  # Get number of nodes
+  n_nodes <- nrow(adj_matrix)
+  nodes <- rownames(adj_matrix)
+
+  # Initialize results data frame
+  results <- data.frame(
+    node = nodes,
+    effect_size = numeric(n_nodes),
+    stringsAsFactors = FALSE
+  )
+
+  # Create igraph object
+  mode <- ifelse(directed, "directed", "undirected")
+  if (weighted) {
+    g <- graph_from_adjacency_matrix(adj_matrix, mode = mode, weighted = TRUE)
+  } else {
+    g <- graph_from_adjacency_matrix(adj_matrix, mode = mode, weighted = NULL)
+  }
+
+  if (weighted) {
+    # For valued networks
+
+    # Create p matrix (row-stochastic): each row divided by its sum
+    p_matrix <- adj_matrix
+    for (i in 1:n_nodes) {
+      row_sum <- sum(p_matrix[i, ])
+      if (row_sum > 0) {
+        p_matrix[i, ] <- p_matrix[i, ] / row_sum
+      }
+    }
+
+    # Create m matrix (marginal strength): each element divided by the max in its row
+    m_matrix <- adj_matrix
+    for (i in 1:n_nodes) {
+      row_max <- max(m_matrix[i, ])
+      if (row_max > 0) {
+        m_matrix[i, ] <- m_matrix[i, ] / row_max
+      }
+    }
+
+    # Calculate effect size for each ego
+    for (i in 1:n_nodes) {
+      ego <- nodes[i]
+      effect_size <- 0
+
+      # For each j (alter of ego i)
+      for (j in 1:n_nodes) {
+        if (i != j && adj_matrix[i, j] > 0) {
+          redundancy <- 0
+
+          # For each k (another alter of ego i, k != j)
+          for (k in 1:n_nodes) {
+            if (i != k && j != k && adj_matrix[i, k] > 0) {
+              # Calculate redundancy between j and k
+              redundancy <- redundancy + (p_matrix[i, k] * m_matrix[k, j])
+            }
+          }
+
+          # Add contribution from alter j to the effect size
+          effect_size <- effect_size + (1 - redundancy)
+        }
+      }
+
+      results$effect_size[i] <- effect_size
+    }
+  } else {
+    # For binary networks using formula ES_i = n_i - d̄_i
+
+    for (i in 1:n_nodes) {
+      ego <- nodes[i]
+
+      # Get all alters of ego i
+      alters_idx <- which(adj_matrix[i, ] > 0)
+      n_alters <- length(alters_idx)
+
+      # If no alters, effect size = 0
+      if (n_alters == 0) {
+        results$effect_size[i] <- 0
+        next
+      }
+
+      # Create submatrix of relationships between alters (excluding ego)
+      alter_matrix <- adj_matrix[alters_idx, alters_idx, drop = FALSE]
+
+      # Calculate average degree within alter network
+      if (n_alters > 1) {
+        alter_degrees <- rowSums(alter_matrix)
+        avg_alter_degree <- mean(alter_degrees)
+      } else {
+        avg_alter_degree <- 0
+      }
+
+      # Calculate effect size
+      results$effect_size[i] <- n_alters - avg_alter_degree
+    }
+  }
+
+  return(results)
+}
