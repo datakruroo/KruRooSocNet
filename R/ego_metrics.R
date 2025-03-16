@@ -1618,8 +1618,8 @@ calculate_effect_size <- function(adj_matrix, weighted = FALSE, directed = TRUE)
 #' @param directed Logical, whether the network is directed. Default is TRUE
 #' @param diag Logical, whether to include self-loops. Default is FALSE
 #'
-#' @return A tibble in long format containing ego, alter, pairwise constraint,
-#'         and total constraint values
+#' @return A tibble in long format containing ego, alter, and constraint values.
+#'         When alter = "total", the constraint value represents the total constraint for that ego.
 #' @export
 #' @importFrom igraph graph_from_adjacency_matrix
 #' @importFrom dplyr %>% mutate group_by summarize ungroup
@@ -1709,17 +1709,16 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
       results_list[[counter]] <- list(
         ego = ego,
         alter = alter,
-        pairwise_constraint = pairwise_constraint
+        constraint = pairwise_constraint
       )
       counter <- counter + 1
     }
 
     # Add the total constraint as special rows
-    # This will make it easier to filter/extract total constraints later
     results_list[[counter]] <- list(
       ego = ego,
       alter = "total",
-      pairwise_constraint = total_constraint
+      constraint = total_constraint
     )
     counter <- counter + 1
   }
@@ -1728,15 +1727,5 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
   results_df <- do.call(rbind, lapply(results_list, as.data.frame))
   results_tibble <- tibble::as_tibble(results_df)
 
-  # Create a new column for total constraint that repeats the value for all rows of the same ego
-  results_final <- results_tibble %>%
-    group_by(ego) %>%
-    mutate(total_constraint = pairwise_constraint[alter == "total"]) %>%
-    ungroup()
-
-  # Option 1: Keep the "total" rows
-  return(results_final)
-
-  # Option 2: Remove the "total" rows if you prefer
-  # return(results_final %>% filter(alter != "total"))
+  return(results_tibble)
 }

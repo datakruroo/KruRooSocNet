@@ -14,8 +14,8 @@ calculate_constraint(adj_matrix, directed = TRUE, diag = FALSE)
 \item{diag}{Logical, whether to include self-loops. Default is FALSE}
 }
 \value{
-A tibble in long format containing ego, alter, pairwise constraint,
-and total constraint values
+A tibble in long format containing ego, alter, and constraint values.
+When alter = "total", the constraint value represents the total constraint for that ego.
 }
 \description{
 This function calculates the pairwise constraint (c_ij) and total constraint
