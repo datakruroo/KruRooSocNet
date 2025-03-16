@@ -1609,21 +1609,20 @@ calculate_effect_size <- function(adj_matrix, weighted = FALSE, directed = TRUE)
 
 #' Calculate Pairwise and Total Constraint for Ego Networks
 #'
-#' This function calculates the pairwise constraint (c_ij) and total constraint
-#' for each ego in a network using Burt's formula:
-#' c_ij = (p_ij + sum_k(p_ik * p_kj))^2
-#' where p_ij is the proportion of ego i's network time/energy invested in relationship with j.
+#' This function calculates the constraint in ego networks using Burt's formula:
+#' C_i = sum_j(p_ij + sum_q(p_iq*p_qj))^2
+#' where p_ij = (a_ij + a_ji) / sum_k(a_ik + a_ki)
+#'
+#' Constraint is higher if ego has fewer or more redundant contacts.
+#' For isolated vertices (degree = 0), constraint is set to NA.
 #'
 #' @param adj_matrix An adjacency matrix representing network ties
-#' @param directed Logical, whether the network is directed. Default is TRUE
-#' @param diag Logical, whether to include self-loops. Default is FALSE
+#' @param directed Logical, whether to treat the network as directed. Default is TRUE
 #'
 #' @return A tibble in long format containing ego, alter, and constraint values.
 #'         When alter = "total", the constraint value represents the total constraint for that ego.
 #' @export
-#' @importFrom igraph graph_from_adjacency_matrix
-#' @importFrom dplyr %>% mutate group_by summarize ungroup
-#' @importFrom tidyr pivot_longer
+#' @importFrom dplyr %>%
 #' @importFrom tibble tibble
 #'
 #' @examples
@@ -1633,7 +1632,7 @@ calculate_effect_size <- function(adj_matrix, weighted = FALSE, directed = TRUE)
 #'
 #' # Calculate constraint
 #' calculate_constraint(adj_mat)
-calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
+calculate_constraint <- function(adj_matrix, directed = TRUE) {
   # Input validation
   if (!is.matrix(adj_matrix)) {
     stop("adj_matrix must be a matrix")
@@ -1652,13 +1651,33 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
   p_matrix <- matrix(0, nrow = n_nodes, ncol = n_nodes)
   rownames(p_matrix) <- colnames(p_matrix) <- nodes
 
-  # Calculate row sums for normalization
-  row_sums <- rowSums(adj_matrix)
-
-  # Avoid division by zero
+  # Calculate p_ij values according to Burt's formula:
+  # p_ij = (a_ij + a_ji) / sum_k(a_ik + a_ki)
   for (i in 1:n_nodes) {
-    if (row_sums[i] > 0) {
-      p_matrix[i, ] <- adj_matrix[i, ] / row_sums[i]
+    # Calculate denominator: sum of all connections for ego i
+    denominator <- 0
+    for (k in 1:n_nodes) {
+      if (i != k) {
+        # Add both outgoing and incoming ties
+        denominator <- denominator + adj_matrix[i, k] + adj_matrix[k, i]
+      }
+    }
+
+    # If ego has no connections, set denominator to NA
+    if (denominator == 0) {
+      for (j in 1:n_nodes) {
+        if (i != j) {
+          p_matrix[i, j] <- NA
+        }
+      }
+    } else {
+      # Calculate p_ij for each alter j
+      for (j in 1:n_nodes) {
+        if (i != j) {
+          # For directed networks, consider both directions
+          p_matrix[i, j] <- (adj_matrix[i, j] + adj_matrix[j, i]) / denominator
+        }
+      }
     }
   }
 
@@ -1666,46 +1685,53 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
   results_list <- list()
   counter <- 1
 
-  # Calculate constraint for each ego-alter pair and total constraint for each ego
+  # Calculate constraint for each ego
   for (i in 1:n_nodes) {
     ego <- nodes[i]
     total_constraint <- 0
 
+    # Skip isolated vertices
+    if (all(is.na(p_matrix[i, -i]))) {
+      results_list[[counter]] <- list(
+        ego = ego,
+        alter = "total",
+        constraint = NA
+      )
+      counter <- counter + 1
+      next
+    }
+
+    # Calculate pairwise constraints
     for (j in 1:n_nodes) {
-      # Skip if i == j and diag is FALSE (no self loops)
-      if (i == j && !diag) {
-        next
-      }
+      if (i == j) next
 
       alter <- nodes[j]
 
-      # Skip if there's no direct connection from i to j
-      if (p_matrix[i, j] == 0) {
-        next
-      }
+      # Skip if there's no connection
+      if (p_matrix[i, j] == 0) next
 
-      # Calculate the direct relationship value
+      # Direct investment
       direct <- p_matrix[i, j]
 
-      # Calculate the indirect relationship value through all k
+      # Indirect paths through all q
       indirect <- 0
-      for (k in 1:n_nodes) {
-        # Skip when k is i or j
-        if (k == i || k == j) {
-          next
-        }
+      for (q in 1:n_nodes) {
+        # Skip ego and current alter
+        if (q == i || q == j) next
 
-        # Add indirect path i->k->j
-        indirect <- indirect + (p_matrix[i, k] * p_matrix[k, j])
+        # Only consider if both connections exist
+        if (!is.na(p_matrix[i, q]) && !is.na(p_matrix[q, j])) {
+          indirect <- indirect + (p_matrix[i, q] * p_matrix[q, j])
+        }
       }
 
-      # Calculate pairwise constraint c_ij
+      # Calculate pairwise constraint: (p_ij + indirect)^2
       pairwise_constraint <- (direct + indirect)^2
 
-      # Add to the total constraint for ego
+      # Add to total constraint
       total_constraint <- total_constraint + pairwise_constraint
 
-      # Store the results
+      # Store pairwise constraint
       results_list[[counter]] <- list(
         ego = ego,
         alter = alter,
@@ -1714,7 +1740,7 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
       counter <- counter + 1
     }
 
-    # Add the total constraint as special rows
+    # Store total constraint
     results_list[[counter]] <- list(
       ego = ego,
       alter = "total",
@@ -1724,8 +1750,12 @@ calculate_constraint <- function(adj_matrix, directed = TRUE, diag = FALSE) {
   }
 
   # Convert list to tibble (long format)
-  results_df <- do.call(rbind, lapply(results_list, as.data.frame))
-  results_tibble <- tibble::as_tibble(results_df)
-
-  return(results_tibble)
+  if (length(results_list) > 0) {
+    results_df <- do.call(rbind, lapply(results_list, as.data.frame))
+    results_tibble <- tibble::as_tibble(results_df)
+    return(results_tibble)
+  } else {
+    # Return empty tibble if no results
+    return(tibble::tibble(ego = character(), alter = character(), constraint = numeric()))
+  }
 }

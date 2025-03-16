@@ -4,24 +4,25 @@
 \alias{calculate_constraint}
 \title{Calculate Pairwise and Total Constraint for Ego Networks}
 \usage{
-calculate_constraint(adj_matrix, directed = TRUE, diag = FALSE)
+calculate_constraint(adj_matrix, directed = TRUE)
 }
 \arguments{
 \item{adj_matrix}{An adjacency matrix representing network ties}
 
-\item{directed}{Logical, whether the network is directed. Default is TRUE}
-
-\item{diag}{Logical, whether to include self-loops. Default is FALSE}
+\item{directed}{Logical, whether to treat the network as directed. Default is TRUE}
 }
 \value{
 A tibble in long format containing ego, alter, and constraint values.
 When alter = "total", the constraint value represents the total constraint for that ego.
 }
 \description{
-This function calculates the pairwise constraint (c_ij) and total constraint
-for each ego in a network using Burt's formula:
-c_ij = (p_ij + sum_k(p_ik * p_kj))^2
-where p_ij is the proportion of ego i's network time/energy invested in relationship with j.
+This function calculates the constraint in ego networks using Burt's formula:
+C_i = sum_j(p_ij + sum_q(p_iq*p_qj))^2
+where p_ij = (a_ij + a_ji) / sum_k(a_ik + a_ki)
+}
+\details{
+Constraint is higher if ego has fewer or more redundant contacts.
+For isolated vertices (degree = 0), constraint is set to NA.
 }
 \examples{
 # Create sample adjacency matrix
