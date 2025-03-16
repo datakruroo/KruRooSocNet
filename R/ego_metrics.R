@@ -1759,3 +1759,176 @@ calculate_constraint <- function(adj_matrix, directed = TRUE) {
     return(tibble::tibble(ego = character(), alter = character(), constraint = numeric()))
   }
 }
+
+#' Calculate Structural Measures for Ego Networks
+#'
+#' This function calculates various structural measures for ego networks,
+#' including density, centralization, number of components, largest component size,
+#' and compactness (average reciprocal distance).
+#'
+#' @param adj_matrix An adjacency matrix representing network ties
+#' @param directed Logical, whether the network is directed. Default is TRUE
+#' @param centralization_type Type of centralization to calculate: "degree", "betweenness",
+#'                           "closeness", or "eigenvector". Default is "degree"
+#' @param degree_mode For degree centralization, specify "in", "out", or "all". Default is "all"
+#'
+#' @return A data frame with rows for each ego and columns for different structural measures
+#' @export
+#' @importFrom igraph graph_from_adjacency_matrix induced_subgraph graph.density
+#'                    centralization.degree centralization.betweenness
+#'                    centralization.closeness centralization.evcent
+#'                    components distances
+#'
+#' @examples
+#' # Create sample adjacency matrix
+#' adj_mat <- matrix(c(0,1,1,0,1,0,0,1,1,0,0,1), nrow=4, byrow=TRUE)
+#' rownames(adj_mat) <- colnames(adj_mat) <- paste0("N", 1:4)
+#'
+#' # Calculate ego network structural measures with in-degree centralization
+#' ego_structure(adj_mat, centralization_type = "degree", degree_mode = "in")
+calculate_ego_structure <- function(adj_matrix, directed = TRUE, centralization_type = "degree",
+                          degree_mode = "all") {
+  # Input validation
+  if (!is.matrix(adj_matrix)) {
+    stop("adj_matrix must be a matrix")
+  }
+
+  # Validate degree_mode
+  if (!degree_mode %in% c("in", "out", "all")) {
+    stop("degree_mode must be one of: 'in', 'out', or 'all'")
+  }
+
+  # Ensure matrix has row and column names
+  if (is.null(rownames(adj_matrix))) {
+    rownames(adj_matrix) <- colnames(adj_matrix) <- paste0("N", 1:nrow(adj_matrix))
+  }
+
+  # Get node names
+  nodes <- rownames(adj_matrix)
+  n_nodes <- length(nodes)
+
+  # Create igraph object from adjacency matrix
+  mode <- ifelse(directed, "directed", "undirected")
+  full_graph <- igraph::graph_from_adjacency_matrix(adj_matrix, mode = mode, weighted = TRUE)
+
+  # Initialize results data frame
+  results <- data.frame(
+    ego = nodes,
+    density = numeric(n_nodes),
+    centralization = numeric(n_nodes),
+    num_components = numeric(n_nodes),
+    largest_component_size = numeric(n_nodes),
+    compactness = numeric(n_nodes),
+    stringsAsFactors = FALSE
+  )
+
+  # Calculate structural measures for each ego network
+  for (i in 1:n_nodes) {
+    ego <- nodes[i]
+
+    # Get ego's neighbors (alters)
+    neighbors <- which(adj_matrix[i, ] > 0 | adj_matrix[, i] > 0)
+
+    # Skip if ego has no alters
+    if (length(neighbors) == 0) {
+      results$density[i] <- NA
+      results$centralization[i] <- NA
+      results$num_components[i] <- NA
+      results$largest_component_size[i] <- NA
+      results$compactness[i] <- NA
+      next
+    }
+
+    # Create subgraph of alters (exclude ego)
+    alters <- nodes[neighbors]
+    alter_ids <- match(alters, nodes)
+
+    # Extract the alter-only network
+    alter_matrix <- adj_matrix[alter_ids, alter_ids, drop = FALSE]
+    alter_graph <- igraph::graph_from_adjacency_matrix(alter_matrix, mode = mode, weighted = TRUE)
+
+    # 1. Calculate density
+    results$density[i] <- igraph::graph.density(alter_graph)
+
+    # 2. Calculate centralization
+    # Skip if there's only one alter
+    if (length(neighbors) == 1) {
+      results$centralization[i] <- NA
+    } else {
+      # Calculate centralization based on specified type
+      tryCatch({
+        if (centralization_type == "degree") {
+          results$centralization[i] <- igraph::centralization.degree(
+            alter_graph,
+            mode = degree_mode,
+            normalized = TRUE
+          )$centralization
+        } else if (centralization_type == "betweenness") {
+          results$centralization[i] <- igraph::centralization.betweenness(
+            alter_graph,
+            directed = directed,
+            normalized = TRUE
+          )$centralization
+        } else if (centralization_type == "closeness") {
+          results$centralization[i] <- igraph::centralization.closeness(
+            alter_graph,
+            mode = degree_mode,  # Also use degree_mode for closeness
+            normalized = TRUE
+          )$centralization
+        } else if (centralization_type == "eigenvector") {
+          results$centralization[i] <- igraph::centralization.evcent(
+            alter_graph,
+            directed = directed,
+            normalized = TRUE
+          )$centralization
+        }
+      }, error = function(e) {
+        results$centralization[i] <- NA
+      })
+    }
+
+    # 3. Calculate number of components
+    comp <- igraph::components(alter_graph)
+    results$num_components[i] <- comp$no
+
+    # 4. Calculate size of largest component
+    if (comp$no > 0) {
+      results$largest_component_size[i] <- max(table(comp$membership))
+    } else {
+      results$largest_component_size[i] <- 0
+    }
+
+    # 5. Calculate compactness (average reciprocal distance)
+    if (length(neighbors) == 1) {
+      # If only one alter, compactness is 1 (by definition)
+      results$compactness[i] <- 1
+    } else {
+      # Calculate distances between all pairs of alters
+      dist_matrix <- igraph::distances(alter_graph, mode = "all")
+
+      # Calculate reciprocal distances (1/distance, 0 if unreachable)
+      recip_matrix <- 1 / dist_matrix
+      recip_matrix[is.infinite(recip_matrix)] <- 0
+
+      # Average reciprocal distance (excluding self-loops)
+      n_alters <- nrow(recip_matrix)
+      total_pairs <- n_alters * (n_alters - 1)
+
+      if (total_pairs > 0) {
+        results$compactness[i] <- sum(recip_matrix[lower.tri(recip_matrix, diag = FALSE)] +
+                                        recip_matrix[upper.tri(recip_matrix, diag = FALSE)]) / total_pairs
+      } else {
+        results$compactness[i] <- 0
+      }
+    }
+  }
+
+  # Add information about the centralization measure used to the column name
+  if (centralization_type == "degree") {
+    colnames(results)[colnames(results) == "centralization"] <- paste0("centralization_degree_", degree_mode)
+  } else {
+    colnames(results)[colnames(results) == "centralization"] <- paste0("centralization_", centralization_type)
+  }
+
+  return(results)
+}
