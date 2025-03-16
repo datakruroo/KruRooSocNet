@@ -6,7 +6,7 @@
 \usage{
 calculate_ego_structure(
   adj_matrix,
-  directed = TRUE,
+  directed = FALSE,
   centralization_type = "degree",
   degree_mode = "all"
 )
@@ -14,7 +14,7 @@ calculate_ego_structure(
 \arguments{
 \item{adj_matrix}{An adjacency matrix representing network ties}
 
-\item{directed}{Logical, whether the network is directed. Default is TRUE}
+\item{directed}{Logical, whether the network is directed. Default is FALSE}
 
 \item{centralization_type}{Type of centralization to calculate: "degree", "betweenness",
 "closeness", or "eigenvector". Default is "degree"}
@@ -34,6 +34,6 @@ and compactness (average reciprocal distance).
 adj_mat <- matrix(c(0,1,1,0,1,0,0,1,1,0,0,1), nrow=4, byrow=TRUE)
 rownames(adj_mat) <- colnames(adj_mat) <- paste0("N", 1:4)
 
-# Calculate ego network structural measures with in-degree centralization
-ego_structure(adj_mat, centralization_type = "degree", degree_mode = "in")
+# Calculate ego network structural measures
+calculate_ego_structure(adj_mat)
 }
