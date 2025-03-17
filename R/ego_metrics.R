@@ -7,7 +7,7 @@
 #' @return A data frame with nodes as rows and different network types as columns
 #' @export
 #' @importFrom igraph graph_from_adjacency_matrix degree V
-#' @importFrom dplyr bind_rows left_join full_join
+#' @importFrom dplyr bind_rows left_join full_join mutate
 #' @importFrom tidyr pivot_wider
 #'
 #' @examples
@@ -32,23 +32,8 @@ calculate_degree <- function(network_list, directed = TRUE, mode = "out") {
     stop("All elements in network_list must be matrices")
   }
 
-  # Get all node names across all networks
-  all_nodes <- c()
-  for (net_name in names(network_list)) {
-    mat <- network_list[[net_name]]
-    # Check if matrix has rownames
-    if (!is.null(rownames(mat))) {
-      all_nodes <- c(all_nodes, rownames(mat))
-    } else {
-      # If no rownames, create node IDs based on matrix dimensions
-      # Prefix with network name to avoid conflicts
-      all_nodes <- c(all_nodes, paste0(net_name, "_", 1:nrow(mat)))
-    }
-  }
-  all_nodes <- unique(all_nodes)
-
-  # Initialize a dataframe to store all results
-  result_df <- data.frame(node = all_nodes, stringsAsFactors = FALSE)
+  # Initialize a list to collect all degree dataframes
+  degree_dfs <- list()
 
   # Process each network
   for (net_name in names(network_list)) {
@@ -57,7 +42,7 @@ calculate_degree <- function(network_list, directed = TRUE, mode = "out") {
 
     # Ensure matrix has rownames and colnames
     if (is.null(rownames(mat))) {
-      rownames(mat) <- colnames(mat) <- paste0(net_name, "_", 1:nrow(mat))
+      rownames(mat) <- colnames(mat) <- paste0("node_", 1:nrow(mat))
     }
 
     g <- graph_from_adjacency_matrix(mat,
@@ -76,16 +61,33 @@ calculate_degree <- function(network_list, directed = TRUE, mode = "out") {
     # Rename degree column to include network name
     colnames(net_df)[2] <- paste0("degree_", net_name)
 
-    # Merge with master dataframe
-    result_df <- left_join(result_df, net_df, by = "node")
+    # Trim whitespace to avoid issues with joining
+    net_df$node <- trimws(net_df$node)
+
+    # Add to list
+    degree_dfs[[net_name]] <- net_df
+  }
+
+  # Start with an empty result
+  result_df <- NULL
+
+  # Merge all dataframes using a loop with full_join
+  for (net_name in names(degree_dfs)) {
+    if (is.null(result_df)) {
+      result_df <- degree_dfs[[net_name]]
+    } else {
+      result_df <- full_join(result_df, degree_dfs[[net_name]], by = "node")
+    }
   }
 
   # Replace NA values with 0 (for nodes that don't exist in specific networks)
   result_df[is.na(result_df)] <- 0
 
+  # Ensure no duplicate rows
+  result_df <- unique(result_df)
+
   return(result_df)
 }
-
 
 #' Calculate Agresti's Index of Qualitative Variation (IQV) for network ties
 #'
