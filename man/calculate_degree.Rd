@@ -20,9 +20,12 @@ A data frame with nodes as rows and different network types as columns
 Calculate degree for each node in multiple network types
 }
 \examples{
-# Create sample adjacency matrices
+# Create sample adjacency matrices with different nodes
 friendship <- matrix(c(0,1,1,0,0,0,1,0,1), nrow=3)
-advice <- matrix(c(0,1,0,0,0,1,1,0,0), nrow=3)
+rownames(friendship) <- colnames(friendship) <- c("A", "B", "C")
+
+advice <- matrix(c(0,1,0,0,0,0,1,0,1,0,0,0,0,1,0,0), nrow=4)
+rownames(advice) <- colnames(advice) <- c("A", "B", "D", "E")
 
 # Calculate outdegree for each network
 networks <- list(friendship = friendship, advice = advice)

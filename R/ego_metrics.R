@@ -3,15 +3,20 @@
 #' @param network_list A list of adjacency matrices, each representing a different type of network
 #' @param directed Logical, whether the networks are directed. Default is TRUE
 #' @param mode Character, the type of degree to calculate: "in", "out", or "all". Default is "out"
+#'
 #' @return A data frame with nodes as rows and different network types as columns
 #' @export
-#' @importFrom igraph graph_from_adjacency_matrix degree
-#' @importFrom dplyr bind_cols
+#' @importFrom igraph graph_from_adjacency_matrix degree V
+#' @importFrom dplyr bind_rows left_join full_join
+#' @importFrom tidyr pivot_wider
 #'
 #' @examples
-#' # Create sample adjacency matrices
+#' # Create sample adjacency matrices with different nodes
 #' friendship <- matrix(c(0,1,1,0,0,0,1,0,1), nrow=3)
-#' advice <- matrix(c(0,1,0,0,0,1,1,0,0), nrow=3)
+#' rownames(friendship) <- colnames(friendship) <- c("A", "B", "C")
+#'
+#' advice <- matrix(c(0,1,0,0,0,0,1,0,1,0,0,0,0,1,0,0), nrow=4)
+#' rownames(advice) <- colnames(advice) <- c("A", "B", "D", "E")
 #'
 #' # Calculate outdegree for each network
 #' networks <- list(friendship = friendship, advice = advice)
@@ -27,39 +32,58 @@ calculate_degree <- function(network_list, directed = TRUE, mode = "out") {
     stop("All elements in network_list must be matrices")
   }
 
-  # Initialize an empty list to store degree data frames
-  degree_list <- list()
+  # Get all node names across all networks
+  all_nodes <- c()
+  for (net_name in names(network_list)) {
+    mat <- network_list[[net_name]]
+    # Check if matrix has rownames
+    if (!is.null(rownames(mat))) {
+      all_nodes <- c(all_nodes, rownames(mat))
+    } else {
+      # If no rownames, create node IDs based on matrix dimensions
+      # Prefix with network name to avoid conflicts
+      all_nodes <- c(all_nodes, paste0(net_name, "_", 1:nrow(mat)))
+    }
+  }
+  all_nodes <- unique(all_nodes)
+
+  # Initialize a dataframe to store all results
+  result_df <- data.frame(node = all_nodes, stringsAsFactors = FALSE)
 
   # Process each network
   for (net_name in names(network_list)) {
     # Create igraph object
-    g <- graph_from_adjacency_matrix(network_list[[net_name]],
+    mat <- network_list[[net_name]]
+
+    # Ensure matrix has rownames and colnames
+    if (is.null(rownames(mat))) {
+      rownames(mat) <- colnames(mat) <- paste0(net_name, "_", 1:nrow(mat))
+    }
+
+    g <- graph_from_adjacency_matrix(mat,
                                      mode = ifelse(directed, "directed", "undirected"))
 
     # Calculate degree
-    node_degree <- igraph::degree(g, mode = mode)
+    node_degrees <- igraph::degree(g, mode = mode)
 
-    # Create a data frame with a descriptive column name
-    degree_df <- data.frame(node_degree)
-    colnames(degree_df) <- paste0("degree_", net_name)
+    # Create a data frame for this network
+    net_df <- data.frame(
+      node = names(node_degrees),
+      degree = as.numeric(node_degrees),
+      stringsAsFactors = FALSE
+    )
 
-    # Add to list
-    degree_list[[net_name]] <- degree_df
+    # Rename degree column to include network name
+    colnames(net_df)[2] <- paste0("degree_", net_name)
+
+    # Merge with master dataframe
+    result_df <- left_join(result_df, net_df, by = "node")
   }
 
-  # Combine all degree data frames
-  result <- bind_cols(degree_list)
+  # Replace NA values with 0 (for nodes that don't exist in specific networks)
+  result_df[is.na(result_df)] <- 0
 
-  # Add node names as a column if available
-  if (!is.null(rownames(network_list[[1]]))) {
-    result$node <- rownames(network_list[[1]])
-    result <- result[, c(ncol(result), 1:(ncol(result)-1))]  # Reorder columns
-  } else {
-    result$node <- 1:nrow(result)
-    result <- result[, c(ncol(result), 1:(ncol(result)-1))]  # Reorder columns
-  }
-
-  return(result)
+  return(result_df)
 }
 
 
